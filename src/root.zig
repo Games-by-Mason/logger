@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 const tracy = @import("tracy");
 
@@ -6,9 +7,19 @@ pub const Options = struct {
     show_info_prefix: bool = true,
     show_scope: bool = true,
     history: struct {
-        entries_log2_capacity: u6 = 0,
-        text_log2_capacity: u6 = 0,
-    } = .{},
+        pub const none: @This() = .{
+            .entries_log2_capacity = 0,
+            .text_log2_capacity = 0,
+        };
+        pub const large: @This() = .{
+            .entries_log2_capacity = 16,
+            .text_log2_capacity = 16,
+        };
+        pub const debug: @This() = if (builtin.mode == .Debug) .large else .none;
+
+        entries_log2_capacity: u6,
+        text_log2_capacity: u6,
+    },
 };
 
 pub const Entry = struct {

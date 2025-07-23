@@ -31,6 +31,11 @@ pub const Entry = struct {
 
 pub fn Logger(options: Options) type {
     return struct {
+        // You can change the log level at runtime by modifying this variable. While filtering out
+        // logs at compile time is neat, it's often convenient to enable them all at compile time
+        // and allow for a command line argument to change the level at runtime.
+        pub var runtime_level: std.log.Level = .debug;
+
         var text: RingBuffer(u8, options.history.text_log2_capacity) = .{};
         pub var entries: RingBuffer(Entry, options.history.entries_log2_capacity) = .{};
         pub var level_count = std.EnumArray(std.log.Level, u64).initFill(0);
@@ -47,6 +52,9 @@ pub fn Logger(options: Options) type {
             comptime format: []const u8,
             args: anytype,
         ) void {
+            // Check the runtime log level
+            if (@intFromEnum(message_level) > @intFromEnum(runtime_level)) return;
+
             const time_ms = std.time.milliTimestamp();
 
             const bold = "\x1b[1m";

@@ -5,8 +5,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .tracy = .{
-            .url = "git+https://github.com/Games-By-Mason/tracy_zig#0cad4646be2791982f692a7a47716ec92b62eb2e",
-            .hash = "tracy-0.0.0-R7l8BdlCAQBFp6uysnan3Alaxap65HBF1mzGdabdKe8z",
+            .url = "git+https://github.com/Games-By-Mason/tracy_zig#876c5c5371a46af5af8d4dd88904bccbf6eeae04",
+            .hash = "tracy-0.0.0-R7l8BV1DAQCm4AvfCxJirPmRXFtkf8eoNp55jPqX1jEL",
         },
     },
     .paths = .{

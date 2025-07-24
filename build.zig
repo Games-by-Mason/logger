@@ -16,9 +16,7 @@ pub fn build(b: *std.Build) void {
     logger.addImport("tracy", tracy.module("tracy"));
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = logger,
     });
     unit_tests.root_module.addImport("tracy", tracy.module("tracy"));
 

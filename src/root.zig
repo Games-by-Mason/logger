@@ -68,30 +68,27 @@ pub fn Logger(options: Options) type {
             const reset = "\x1b[0m";
             const level_txt = comptime message_level.asText();
             const scope_txt = "(" ++ @tagName(scope) ++ ")";
-            const stderr = std.io.getStdErr().writer();
-            var bw = std.io.bufferedWriter(stderr);
-            const writer = bw.writer();
 
-            std.debug.lockStdErr();
-            defer std.debug.unlockStdErr();
+            var stderr_buf: [64]u8 = undefined;
+            const stderr = std.debug.lockStderrWriter(&stderr_buf);
+            defer std.debug.unlockStderrWriter();
             nosuspend {
                 // Write to stderr
                 var wrote_prefix = false;
                 if (message_level != .info or options.show_info_prefix) {
-                    writer.writeAll(bold ++ color ++ level_txt ++ reset) catch return;
+                    stderr.writeAll(bold ++ color ++ level_txt ++ reset) catch return;
                     wrote_prefix = true;
                 }
                 if (options.show_scope) {
-                    writer.writeAll(gray ++ bold ++ scope_txt ++ reset) catch return;
+                    stderr.writeAll(gray ++ bold ++ scope_txt ++ reset) catch return;
                     wrote_prefix = true;
                 }
-                if (message_level == .err) writer.writeAll(bold) catch return;
+                if (message_level == .err) stderr.writeAll(bold) catch return;
                 if (wrote_prefix) {
-                    writer.writeAll(": ") catch return;
+                    stderr.writeAll(": ") catch return;
                 }
-                writer.print(format ++ "\n", args) catch return;
-                writer.writeAll(reset) catch return;
-                bw.flush() catch return;
+                stderr.print(format ++ "\n", args) catch return;
+                stderr.writeAll(reset) catch return;
 
                 // Update the level counter
                 level_count.getPtr(message_level).* +|= 1;

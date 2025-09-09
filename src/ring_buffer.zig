@@ -58,30 +58,30 @@ fn expectRingBufferEqual(T: type, slice: []const T, ring: anytype) !void {
 }
 
 test "RingBuffer.append" {
-    var array = std.ArrayList(u8).init(std.testing.allocator);
-    defer array.deinit();
+    var array: std.ArrayList(u8) = .empty;
+    defer array.deinit(std.testing.allocator);
     var buf = RingBuffer(u8, 2){};
 
     try expectRingBufferEqual(u8, array.items[0..0], &buf);
 
     buf.append(5);
-    try array.append(5);
+    try array.append(std.testing.allocator, 5);
     try expectRingBufferEqual(u8, array.items[(array.items.len - 1)..array.items.len], &buf);
     buf.append(10);
-    try array.append(10);
+    try array.append(std.testing.allocator, 10);
     try expectRingBufferEqual(u8, array.items[(array.items.len - 2)..array.items.len], &buf);
     buf.append(15);
-    try array.append(15);
+    try array.append(std.testing.allocator, 15);
     try expectRingBufferEqual(u8, array.items[(array.items.len - 3)..array.items.len], &buf);
     buf.append(20);
-    try array.append(20);
+    try array.append(std.testing.allocator, 20);
     try expectRingBufferEqual(u8, array.items[(array.items.len - 4)..array.items.len], &buf);
 
     for (0..1000) |i| {
         // Add some random value
         const item: u8 = @truncate(i * 3);
         buf.append(item);
-        try array.append(item);
+        try array.append(std.testing.allocator, item);
 
         // Make sure the ring buffer still matches the end of the array list
         try expectRingBufferEqual(u8, array.items[(array.items.len - 4)..array.items.len], &buf);

@@ -31,10 +31,10 @@ pub const Entry = struct {
 
 pub fn Logger(options: Options) type {
     return struct {
-        // You can change the log level at runtime by modifying this variable. While filtering out
-        // logs at compile time is neat, it's often convenient to enable them all at compile time
-        // and allow for a command line argument to change the level at runtime.
-        pub var runtime_level: std.log.Level = .debug;
+        /// The min level to log to standard error.
+        pub var stderr_level: std.log.Level = .debug;
+        /// The min level to log to log to the history buffer.
+        pub var ring_level: std.log.Level = .debug;
 
         var text: RingBuffer(u8, options.history.text_log2_capacity) = .{};
         pub var entries: RingBuffer(Entry, options.history.entries_log2_capacity) = .{};
@@ -52,8 +52,10 @@ pub fn Logger(options: Options) type {
             comptime format: []const u8,
             args: anytype,
         ) void {
-            // Check the runtime log level
-            if (@intFromEnum(message_level) > @intFromEnum(runtime_level)) return;
+            // Check the runtime log levels
+            const log_stderr = @intFromEnum(message_level) <= @intFromEnum(stderr_level);
+            const log_history = @intFromEnum(message_level) <= @intFromEnum(ring_level);
+            if (!log_stderr and !log_history) return;
 
             const time_ms = std.time.milliTimestamp();
 
@@ -69,32 +71,33 @@ pub fn Logger(options: Options) type {
             const level_txt = comptime message_level.asText();
             const scope_txt = "(" ++ @tagName(scope) ++ ")";
 
+            // We use the stderr lock for both logging to stderr and to the ring buffer for now, but
+            // this can be made more fine grained in the future by creating a second lock if needed.
             var stderr_buf: [64]u8 = undefined;
             const stderr = std.debug.lockStderrWriter(&stderr_buf);
             defer std.debug.unlockStderrWriter();
             nosuspend {
-                // Write to stderr
-                var wrote_prefix = false;
-                if (message_level != .info or options.show_info_prefix) {
-                    stderr.writeAll(bold ++ color ++ level_txt ++ reset) catch return;
-                    wrote_prefix = true;
-                }
-                if (options.show_scope) {
-                    stderr.writeAll(gray ++ bold ++ scope_txt ++ reset) catch return;
-                    wrote_prefix = true;
-                }
-                if (message_level == .err) stderr.writeAll(bold) catch return;
-                if (wrote_prefix) {
-                    stderr.writeAll(": ") catch return;
-                }
-                stderr.print(format ++ "\n", args) catch return;
-                stderr.writeAll(reset) catch return;
-
-                // Update the level counter
                 level_count.getPtr(message_level).* +|= 1;
 
-                // Write to history
-                if (options.history.text_log2_capacity > 0 and options.history.entries_log2_capacity > 0) {
+                if (log_stderr) {
+                    var wrote_prefix = false;
+                    if (message_level != .info or options.show_info_prefix) {
+                        stderr.writeAll(bold ++ color ++ level_txt ++ reset) catch return;
+                        wrote_prefix = true;
+                    }
+                    if (options.show_scope) {
+                        stderr.writeAll(gray ++ bold ++ scope_txt ++ reset) catch return;
+                        wrote_prefix = true;
+                    }
+                    if (message_level == .err) stderr.writeAll(bold) catch return;
+                    if (wrote_prefix) {
+                        stderr.writeAll(": ") catch return;
+                    }
+                    stderr.print(format ++ "\n", args) catch return;
+                    stderr.writeAll(reset) catch return;
+                }
+
+                if (log_history and options.history.text_log2_capacity > 0 and options.history.entries_log2_capacity > 0) {
                     // Get the length of the message
                     const message_len = std.fmt.count(format, args);
 

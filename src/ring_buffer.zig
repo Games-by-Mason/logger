@@ -36,7 +36,7 @@ pub fn RingBuffer(T: type, log2_capacity: u6) type {
 
         pub fn index(self: *const @This(), i: usize) usize {
             // Get the starting position
-            const start = self.end -% @as(Index, @truncate(self.len));
+            const start = self.headIndex();
 
             // Offset and maybe wrap the given index. This cast is fine because if it overflows,
             // we're out of bounds anyway.
@@ -45,6 +45,10 @@ pub fn RingBuffer(T: type, log2_capacity: u6) type {
 
         pub fn pop(self: *@This()) void {
             self.len -= 1;
+        }
+
+        pub fn headIndex(self: *const @This()) Index {
+            return self.end -% @as(Index, @truncate(self.len));
         }
     };
 }

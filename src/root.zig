@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 const tracy = @import("tracy");
+
+pub const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
 pub const Options = struct {
     show_info_prefix: bool = true,

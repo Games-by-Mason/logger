@@ -34,8 +34,13 @@ pub fn Logger(options: Options) type {
     return struct {
         /// The min level to log to standard error.
         pub var stderr_level: std.log.Level = .debug;
-        /// The min level to log to log to the history buffer.
+        /// The min level to log to the history ring buffer.
         pub var ring_level: std.log.Level = .debug;
+        /// The writer to write to the writer.
+        pub var writer_level: std.log.Level = .debug;
+        /// If present, logs are written to this writer. Typically used to write logs to disk,
+        /// assign this field at runtime as soon as you're able to create the writer.
+        pub var writer: ?*std.Io.Writer = null;
 
         var text: RingBuffer(u8, options.history.text_log2_capacity) = .{};
         pub var entries: RingBuffer(Entry, options.history.entries_log2_capacity) = .{};
@@ -56,7 +61,8 @@ pub fn Logger(options: Options) type {
             // Check the runtime log levels
             const log_stderr = @intFromEnum(message_level) <= @intFromEnum(stderr_level);
             const log_history = @intFromEnum(message_level) <= @intFromEnum(ring_level);
-            if (!log_stderr and !log_history) return;
+            const log_writer = writer != null and @intFromEnum(message_level) <= @intFromEnum(writer_level);
+            if (!log_stderr and !log_history and !log_writer) return;
 
             const time_ms = std.time.milliTimestamp();
 
@@ -72,9 +78,9 @@ pub fn Logger(options: Options) type {
             const level_txt = comptime message_level.asText();
             const scope_txt = "(" ++ @tagName(scope) ++ ")";
 
-            // We use the stderr lock for both logging to stderr and to the ring buffer for now, but
-            // this can be made more fine grained in the future by creating a second lock if needed.
-            var stderr_buf: [64]u8 = undefined;
+            // We use the stderr lock for locking everything for now. This can be made more fine
+            // grained in the future by creating separate locks per output if needed.
+            var stderr_buf: [128]u8 = undefined;
             const stderr = std.debug.lockStderrWriter(&stderr_buf);
             defer std.debug.unlockStderrWriter();
             nosuspend {
@@ -144,6 +150,25 @@ pub fn Logger(options: Options) type {
                         });
                     }
                 }
+
+                if (log_writer) {
+                    if (writer) |w| {
+                        // Try to write to the given writer, but ignore errors since there's nothing
+                        // useful we can do if these writes fail. If we're logging a warning or
+                        // error, flush since we might be about to crash.
+                        w.print("{s}({s}, 0x{x}): ", .{
+                            message_level.asText(),
+                            @tagName(scope),
+                            time_ms,
+                        }) catch {};
+                        w.print(format, args) catch {};
+                        w.writeByte('\n') catch {};
+                        switch (message_level) {
+                            .err, .warn => w.flush() catch {},
+                            .info, .debug => {},
+                        }
+                    }
+                }
             }
         }
 
@@ -174,6 +199,23 @@ fn expectEntryEqual(expected: ?Entry, found: ?*const Entry) !void {
     try std.testing.expectEqualStrings(expected.?.message, found.?.*.message);
     try std.testing.expectEqualStrings(expected.?.scope, found.?.*.scope);
     try std.testing.expectEqual(expected.?.level, found.?.*.level);
+}
+
+test "writer" {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    var buf_writer: std.Io.Writer.Allocating = .fromArrayList(
+        std.testing.allocator,
+        &buf,
+    );
+    defer buf_writer.deinit();
+    const L = Logger(.{
+        .history = .none,
+    });
+    L.writer = &buf_writer.writer;
+    L.logFn(.info, .scope, "Hello, {s}!", .{"World"});
+    try std.testing.expectStringEndsWith(buf_writer.written(), "): Hello, World!\n");
+    try std.testing.expectStringStartsWith(buf_writer.written(), "info(scope, 0x");
 }
 
 test "simple history" {

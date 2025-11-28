@@ -1,7 +1,7 @@
 .{
     .name = .logger,
     .fingerprint = 0x987e13f39e3df79a,
-    .minimum_zig_version = "0.15.0-dev.388+05e217607",
+    .minimum_zig_version = "0.15.0",
     .version = "0.0.0",
     .dependencies = .{
         .tracy = .{

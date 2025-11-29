@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const tracy = @import("tracy");
 const assert = std.debug.assert;
 
+const Io = std.Io;
+
 const WordWrapIterator = @import("WordWrapIterator.zig");
 
 pub const RingBuffer = @import("ring_buffer.zig").RingBuffer;
@@ -43,11 +45,11 @@ pub const Entry = struct {
 pub fn Logger(options: Options) type {
     return struct {
         /// The min level to log to standard error.
-        pub var stderr_level: std.log.Level = .debug;
+        pub var stderr_level: ?std.log.Level = .debug;
         /// The min level to log to the history ring buffer.
-        pub var ring_level: std.log.Level = .debug;
+        pub var ring_level: ?std.log.Level = .debug;
         /// The writer to write to the writer.
-        pub var writer_level: std.log.Level = .debug;
+        pub var writer_level: ?std.log.Level = .debug;
         /// If present, logs are written to this writer. Typically used to write logs to disk,
         /// assign this field at runtime as soon as you're able to create the writer.
         pub var writer: ?*std.Io.Writer = null;
@@ -57,6 +59,16 @@ pub fn Logger(options: Options) type {
         pub var level_count = std.EnumArray(std.log.Level, u64).initFill(0);
 
         var stderr_buf: [128]u8 = undefined;
+
+        /// Non-null after `init` is called.
+        var maybe_io: ?Io = null;
+
+        /// Initializes IO, making it possible for the logger to include time. If not called all
+        /// logs will be at time 0.
+        pub fn init(io: Io) void {
+            assert(maybe_io == null);
+            maybe_io = io;
+        }
 
         pub fn getEntry(index: usize) ?*const Entry {
             if (index >= entries.len) return null;
@@ -71,48 +83,58 @@ pub fn Logger(options: Options) type {
             args: anytype,
         ) void {
             // Check the runtime log levels
-            const log_stderr = @intFromEnum(message_level) <= @intFromEnum(stderr_level);
-            const log_history = @intFromEnum(message_level) <= @intFromEnum(ring_level);
-            const log_writer = writer != null and @intFromEnum(message_level) <= @intFromEnum(writer_level);
+            const log_stderr = stderr_level != null and @intFromEnum(message_level) <= @intFromEnum(stderr_level.?);
+            const log_history = ring_level != null and @intFromEnum(message_level) <= @intFromEnum(ring_level.?);
+            const log_writer = writer_level != null and writer != null and @intFromEnum(message_level) <= @intFromEnum(writer_level.?);
             if (!log_stderr and !log_history and !log_writer) return;
 
-            const time_ms = std.time.milliTimestamp();
-
-            const bold = "\x1b[1m";
-            const gray = "\x1b[90m";
-            const color = switch (message_level) {
-                .err => "\x1b[31m",
-                .info => "\x1b[32m",
-                .debug => "\x1b[34m",
-                .warn => "\x1b[33m",
+            // Get the current time. If we fail we just set it to 0, no reason to give up on writing
+            // the rest of the log.
+            const time_ms = b: {
+                const io = maybe_io orelse break :b 0;
+                const timestamp = std.Io.Clock.now(.real, io) catch break :b 0;
+                break :b timestamp.toMilliseconds();
             };
-            const reset = "\x1b[0m";
-            const level_txt = comptime message_level.asText();
-            const scope_txt = "(" ++ @tagName(scope) ++ ")";
 
             // We use the stderr lock for locking everything for now. This can be made more fine
             // grained in the future by creating separate locks per output if needed.
-            const stderr = lockWriters();
+            const stderr, const tty_config = lockWriters();
             defer unlockWriters();
             nosuspend {
+                const level_txt = comptime message_level.asText();
+                const scope_txt = "(" ++ @tagName(scope) ++ ")";
+
                 level_count.getPtr(message_level).* +|= 1;
 
                 if (log_stderr) {
+                    // Try to log to stderr, but ignore errors since there's nothing useful we can
+                    // do if this fails.
                     var wrote_prefix = false;
                     if (message_level != .info or options.show_info_prefix) {
-                        stderr.writeAll(bold ++ color ++ level_txt ++ reset) catch return;
+                        tty_config.setColor(stderr, .bold) catch {};
+                        tty_config.setColor(stderr, switch (message_level) {
+                            .err => .red,
+                            .warn => .yellow,
+                            .info => .green,
+                            .debug => .blue,
+                        }) catch {};
+                        stderr.writeAll(level_txt) catch {};
+                        tty_config.setColor(stderr, .reset) catch {};
                         wrote_prefix = true;
                     }
                     if (options.show_scope) {
-                        stderr.writeAll(gray ++ bold ++ scope_txt ++ reset) catch return;
+                        tty_config.setColor(stderr, .bright_black) catch {};
+                        tty_config.setColor(stderr, .bold) catch {};
+                        stderr.writeAll(scope_txt) catch {};
+                        tty_config.setColor(stderr, .reset) catch {};
                         wrote_prefix = true;
                     }
-                    if (message_level == .err) stderr.writeAll(bold) catch return;
+                    if (message_level == .err) tty_config.setColor(stderr, .bold) catch {};
                     if (wrote_prefix) {
-                        stderr.writeAll(": ") catch return;
+                        stderr.writeAll(": ") catch {};
                     }
-                    stderr.print(format ++ "\n", args) catch return;
-                    stderr.writeAll(reset) catch return;
+                    stderr.print(format ++ "\n", args) catch {};
+                    tty_config.setColor(stderr, .reset) catch {};
                 }
 
                 if (log_history and options.history.text_log2_capacity > 0 and options.history.entries_log2_capacity > 0) {
@@ -191,7 +213,7 @@ pub fn Logger(options: Options) type {
 
         /// Locks the log writers, and returns the stderr writer. We currently use the same mutex
         /// for all writes.
-        pub fn lockWriters() *std.Io.Writer {
+        pub fn lockWriters() struct { *Io.Writer, std.Io.tty.Config } {
             return std.debug.lockStderrWriter(&stderr_buf);
         }
 
@@ -241,6 +263,7 @@ test "writer" {
     const L = Logger(.{
         .history = .none,
     });
+    L.stderr_level = null;
     L.writer = &buf_writer.writer;
     L.logFn(.info, .scope, "Hello, {s}!", .{"World"});
     try std.testing.expectStringEndsWith(buf_writer.written(), "): Hello, World!\n");
@@ -254,6 +277,7 @@ test "simple history" {
             .text_log2_capacity = 13,
         },
     });
+    L.stderr_level = null;
     try expectEntryEqual(null, L.getEntry(0));
 
     L.logFn(.info, .scope, "Hello, {s}!", .{"World"});
@@ -291,6 +315,7 @@ test "wrapping entries" {
             .text_log2_capacity = 13,
         },
     });
+    L.stderr_level = null;
     try expectEntryEqual(null, L.getEntry(0));
 
     L.logFn(.info, .scope, "This is the first {s}", .{"message"});
@@ -329,13 +354,14 @@ test "wrapping entries" {
     try expectEntryEqual(null, L.getEntry(4));
 }
 
-test "wrapping text" {
+test "wrapping text ringbuffer" {
     const L = Logger(.{
         .history = .{
             .entries_log2_capacity = 13,
             .text_log2_capacity = 2,
         },
     });
+    L.stderr_level = null;
     try expectEntryEqual(null, L.getEntry(0));
 
     L.logFn(.info, .scope1, "a", .{});

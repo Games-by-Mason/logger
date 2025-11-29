@@ -23,8 +23,11 @@ pub const Options = struct {
 
         entries_log2_capacity: u6,
         text_log2_capacity: u6,
+        /// Lines longer than this are wrapped into new entries to ease efficient log rendering from
+        /// the history buffer in app by allowing for fixed vertical entry sizes, simplifying
+        /// clipping.
+        max_line_len: u16 = 100,
     },
-    max_line_len: u16 = 100,
 };
 
 pub const Entry = struct {
@@ -148,7 +151,9 @@ pub fn Logger(options: Options) type {
                     // logs, allowing for viewing and filtering large numbers of logs without perf
                     // issues since there's no dynamic word wrapping resulting in variable height
                     // log lines.
-                    var lines: WordWrapIterator = .init(buf, .{ .max_line_len = options.max_line_len });
+                    var lines: WordWrapIterator = .init(buf, .{
+                        .max_line_len = options.history.max_line_len,
+                    });
                     var indent = true;
                     while (lines.next()) |line| {
                         entries.append(.{

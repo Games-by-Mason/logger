@@ -56,6 +56,8 @@ pub fn Logger(options: Options) type {
         pub var entries: RingBuffer(Entry, options.history.entries_log2_capacity) = .{};
         pub var level_count = std.EnumArray(std.log.Level, u64).initFill(0);
 
+        var stderr_buf: [128]u8 = undefined;
+
         pub fn getEntry(index: usize) ?*const Entry {
             if (index >= entries.len) return null;
             const i = entries.index(index);
@@ -90,9 +92,8 @@ pub fn Logger(options: Options) type {
 
             // We use the stderr lock for locking everything for now. This can be made more fine
             // grained in the future by creating separate locks per output if needed.
-            var stderr_buf: [128]u8 = undefined;
-            const stderr = std.debug.lockStderrWriter(&stderr_buf);
-            defer std.debug.unlockStderrWriter();
+            const stderr = lockWriters();
+            defer unlockWriters();
             nosuspend {
                 level_count.getPtr(message_level).* +|= 1;
 
@@ -186,6 +187,17 @@ pub fn Logger(options: Options) type {
                     }
                 }
             }
+        }
+
+        /// Locks the log writers, and returns the stderr writer. We currently use the same mutex
+        /// for all writes.
+        pub fn lockWriters() *std.Io.Writer {
+            return std.debug.lockStderrWriter(&stderr_buf);
+        }
+
+        /// Unlocks the writers.
+        pub fn unlockWriters() void {
+            std.debug.unlockStderrWriter();
         }
 
         fn buffersOverlap(a: []const u8, b: []const u8) bool {

@@ -1,6 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const tracy = @import("tracy");
+const assert = std.debug.assert;
+
+const WordWrapIterator = @import("WordWrapIterator.zig");
 
 pub const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
@@ -21,6 +24,7 @@ pub const Options = struct {
         entries_log2_capacity: u6,
         text_log2_capacity: u6,
     },
+    max_line_len: u16 = 100,
 };
 
 pub const Entry = struct {
@@ -28,6 +32,9 @@ pub const Entry = struct {
     scope: []const u8,
     message: []const u8,
     time_ms: i64,
+    /// Set to true if this is a continuation of a previous log that was split on newline or because
+    /// it's over the max line length.
+    indent: bool,
 };
 
 pub fn Logger(options: Options) type {
@@ -136,18 +143,22 @@ pub fn Logger(options: Options) type {
                         },
                     });
 
-                    // Add this log to the list of entries. If there are line breaks, break it up
-                    // into multiple entries--this makes it easier on log viewers which want to only
-                    // render the visible parts of logs by making log entries have a fixed line
-                    // height.
-                    var lines = std.mem.splitScalar(u8, buf, '\n');
+                    // Add this log to the list of entries. We apply word wrapping (and also break
+                    // on newlines in the process) so that in app log viewers can efficiently clip
+                    // logs, allowing for viewing and filtering large numbers of logs without perf
+                    // issues since there's no dynamic word wrapping resulting in variable height
+                    // log lines.
+                    var lines: WordWrapIterator = .init(buf, .{ .max_line_len = options.max_line_len });
+                    var indent = true;
                     while (lines.next()) |line| {
                         entries.append(.{
                             .level = message_level,
                             .scope = @tagName(scope),
                             .message = line,
                             .time_ms = time_ms,
+                            .indent = !indent,
                         });
+                        indent = false;
                     }
                 }
 
@@ -194,11 +205,12 @@ pub fn Logger(options: Options) type {
 }
 
 fn expectEntryEqual(expected: ?Entry, found: ?*const Entry) !void {
+    comptime assert(std.meta.fields(Entry).len == 5); // Update this function if this fails!
     try std.testing.expectEqual(expected == null, found == null);
     if (expected == null) return;
     try std.testing.expectEqualStrings(expected.?.message, found.?.*.message);
     try std.testing.expectEqualStrings(expected.?.scope, found.?.*.scope);
-    try std.testing.expectEqual(expected.?.level, found.?.*.level);
+    try std.testing.expectEqual(expected.?.indent, found.?.*.indent);
 }
 
 test "writer" {
@@ -228,26 +240,29 @@ test "simple history" {
     try expectEntryEqual(null, L.getEntry(0));
 
     L.logFn(.info, .scope, "Hello, {s}!", .{"World"});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .info,
         .scope = "scope",
         .message = "Hello, World!",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
     try expectEntryEqual(null, L.getEntry(1));
 
     L.logFn(.warn, .scope2, "This is a test!", .{});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .info,
         .scope = "scope",
         .message = "Hello, World!",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope2",
         .message = "This is a test!",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(1).?);
     try expectEntryEqual(null, L.getEntry(2));
 }
@@ -266,29 +281,33 @@ test "wrapping entries" {
     L.logFn(.err, .scope3, "This is message three", .{});
     L.logFn(.debug, .scope4, "This is message four", .{});
     L.logFn(.warn, .scope5, "This message should wrap{s}", .{"!!!"});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope2",
         .message = "This is message 2!",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .err,
         .scope = "scope3",
         .message = "This is message three",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(1).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .debug,
         .scope = "scope4",
         .message = "This is message four",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(2).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope5",
         .message = "This message should wrap!!!",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(3).?);
     try expectEntryEqual(null, L.getEntry(4));
 }
@@ -306,57 +325,65 @@ test "wrapping text" {
     L.logFn(.warn, .scope2, "b", .{});
     L.logFn(.debug, .scope3, "c", .{});
     L.logFn(.err, .scope4, "d", .{});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .info,
         .scope = "scope1",
         .message = "a",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope2",
         .message = "b",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(1).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .debug,
         .scope = "scope3",
         .message = "c",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(2).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .err,
         .scope = "scope4",
         .message = "d",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(3).?);
     try expectEntryEqual(null, L.getEntry(4));
 
     // This wraps the text buffer and invalidates the oldest log
     L.logFn(.warn, .scope5, "e", .{});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope2",
         .message = "b",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .debug,
         .scope = "scope3",
         .message = "c",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(1).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .err,
         .scope = "scope4",
         .message = "d",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(2).?);
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .warn,
         .scope = "scope5",
         .message = "e",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(3).?);
     try expectEntryEqual(null, L.getEntry(4));
 
@@ -364,25 +391,28 @@ test "wrapping text" {
     // resulting in us wrapping and invalidating the first one as well
     L.logFn(.err, .scope6, "12", .{});
     L.logFn(.info, .scope7, "34", .{});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .info,
         .scope = "scope7",
         .message = "34",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
     try expectEntryEqual(null, L.getEntry(1));
 
     // If we write a log longer than the entire buffer, it gets truncated
     L.logFn(.debug, .scope8, "abcdefg", .{});
-    try expectEntryEqual(Entry{
+    try expectEntryEqual(.{
         .level = .debug,
         .scope = "scope8",
         .message = "abcd",
         .time_ms = undefined,
+        .indent = false,
     }, L.getEntry(0).?);
     try expectEntryEqual(null, L.getEntry(1));
 }
 
 test {
     _ = @import("ring_buffer.zig");
+    _ = @import("WordWrapIterator.zig");
 }
